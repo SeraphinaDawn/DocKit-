@@ -2,14 +2,11 @@ import {
   ArrowUp,
   ArrowRight,
   BookOpen,
-  CloudMoon,
   FileArchive,
-  FileStack,
   Files,
   GitBranch,
   Hammer,
   HeartHandshake,
-  Home,
   Layers3,
   Lock,
   Loader2,
@@ -17,7 +14,6 @@ import {
   Scissors,
   Sparkles,
   Stamp,
-  SunMedium,
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { FloatWrapper } from './components/FloatWrapper'
@@ -25,77 +21,93 @@ import {
   FloatingChipsCloud,
   type FloatingChipsCloudItem,
 } from './components/FloatingChipsCloud'
+import { NavBar } from './components/NavBar'
+import { ToolboxPage } from './components/ToolboxPage'
 import { loadThemeMode, saveThemeMode, type ThemeMode } from './lib/theme'
 import {
-  ActionCard,
   EmptyState,
   SectionHeading,
   SurfacePanel,
 } from './components/ui'
 import { buttonClasses, cx } from './components/ui-helpers'
-import { PdfStampTool } from './features/PdfStampTool'
-import { SignatureCutoutTool } from './features/SignatureCutoutTool'
-
-type PageId = 'home' | 'capabilities' | 'toolbox' | 'guide' | 'drafts' | 'roadmap'
-type ToolId = 'stamp' | 'merge' | 'extract' | 'convert' | 'sign' | 'ocr'
+import type { PageId, ToolId, ToolMeta } from './types'
 
 type NavItem = {
   id: PageId
   label: string
 }
 
-type ToolMeta = {
-  id: ToolId
-  name: string
-  description: string
-  state: '可用' | '规划中'
-}
+const copy = {
+  available: '可用',
+  planned: '规划中',
+  home: '首页',
+  capabilities: '当前能力',
+  toolbox: '工具箱',
+  guide: '使用教程',
+  drafts: '本地草稿',
+  roadmap: '版本规划',
+  stampTool: 'PDF盖章去白底',
+  stampToolDesc: '上传 PDF 和印章图片，在本地去白底后完成盖章导出。',
+  mergeTool: '多PDF合并',
+  mergeToolDesc: '按顺序合并多个 PDF，输出为一个新的 PDF 文件。',
+  extractTool: '页面提取',
+  extractToolDesc: '提取指定页码，快速生成新的 PDF 文件。',
+  convertTool: '图片PDF转换',
+  convertToolDesc: '支持图片与 PDF 双向转换，适合扫描归档整理。',
+  signTool: '手写签名',
+  signToolDesc: '生成透明背景签名图，方便贴入文书。',
+  ocrTool: '离线OCR',
+  ocrToolDesc: '纯前端文字识别，不上传原始文档。',
+  toolboxDesc: '这里集中展示当前工具能力。已上线工具可直接进入，未完成工具先保留在规划状态。',
+  localProcessing: '本地处理 · 逐步扩展',
+  backToToolbox: '返回工具箱',
+} as const
 
 const navItems: NavItem[] = [
-  { id: 'home', label: '首页' },
-  { id: 'capabilities', label: '当前能力' },
-  { id: 'toolbox', label: '工具箱' },
-  { id: 'guide', label: '使用教程' },
-  { id: 'drafts', label: '本地草稿' },
-  { id: 'roadmap', label: '版本计划' },
+  { id: 'home', label: copy.home },
+  { id: 'capabilities', label: copy.capabilities },
+  { id: 'toolbox', label: copy.toolbox },
+  { id: 'guide', label: copy.guide },
+  { id: 'drafts', label: copy.drafts },
+  { id: 'roadmap', label: copy.roadmap },
 ]
 
 const tools: ToolMeta[] = [
   {
     id: 'stamp',
-    name: 'PDF 盖章去白底',
-    description: '上传 PDF 和印章图片，本地去白底后合成导出。',
-    state: '可用',
+    name: copy.stampTool,
+    description: copy.stampToolDesc,
+    state: copy.available,
   },
   {
     id: 'merge',
-    name: '多 PDF 合并',
-    description: '按顺序合并多个 PDF，输出为一个新文件。',
-    state: '规划中',
+    name: copy.mergeTool,
+    description: copy.mergeToolDesc,
+    state: copy.available,
   },
   {
     id: 'extract',
-    name: '页面提取',
-    description: '提取指定页码，快速生成新的 PDF 文件。',
-    state: '规划中',
+    name: copy.extractTool,
+    description: copy.extractToolDesc,
+    state: copy.planned,
   },
   {
     id: 'convert',
-    name: '图片 PDF 转换',
-    description: '支持图片与 PDF 双向转换，适合扫描归档。',
-    state: '规划中',
+    name: copy.convertTool,
+    description: copy.convertToolDesc,
+    state: copy.planned,
   },
   {
     id: 'sign',
-    name: '手写签名',
-    description: '生成透明背景签名图，方便贴入文书。',
-    state: '可用',
+    name: copy.signTool,
+    description: copy.signToolDesc,
+    state: copy.available,
   },
   {
     id: 'ocr',
-    name: '离线 OCR',
-    description: '纯前端文本识别，不上传原始文档。',
-    state: '规划中',
+    name: copy.ocrTool,
+    description: copy.ocrToolDesc,
+    state: copy.planned,
   },
 ]
 
@@ -108,6 +120,9 @@ function App() {
   const [currentPage, setCurrentPage] = useState<PageId>('home')
   const [activeTool, setActiveTool] = useState<ToolId | null>(null)
   const isNight = themeMode === 'night'
+  const isToolboxLanding = currentPage === 'toolbox' && activeTool === null
+  const isCompactNav = currentPage !== 'home' || activeTool !== null
+  const toolIds = tools.map((tool) => tool.id)
 
   useEffect(() => {
     saveThemeMode(themeMode)
@@ -117,9 +132,9 @@ function App() {
     const handleHashChange = () => {
       const nextHash = window.location.hash.replace('#', '') as PageId | ToolId | ''
 
-      if (nextHash === 'stamp' || nextHash === 'sign') {
+      if (toolIds.includes(nextHash as ToolId)) {
         setCurrentPage('toolbox')
-        setActiveTool(nextHash)
+        setActiveTool(nextHash as ToolId)
         return
       }
 
@@ -137,7 +152,7 @@ function App() {
     handleHashChange()
     window.addEventListener('hashchange', handleHashChange)
     return () => window.removeEventListener('hashchange', handleHashChange)
-  }, [])
+  }, [toolIds])
 
   const activeToolMeta = useMemo(
     () => tools.find((tool) => tool.id === activeTool) ?? null,
@@ -149,19 +164,14 @@ function App() {
   }
 
   function openTool(toolId: ToolId) {
-    if (toolId === 'stamp' || toolId === 'sign') {
-      window.location.hash = toolId
-      return
-    }
-
-    setCurrentPage('toolbox')
-    setActiveTool(null)
+    window.location.hash = toolId
   }
 
   return (
     <main
       className={cx(
-        'relative min-h-screen overflow-x-hidden px-4 py-4 antialiased transition-colors duration-500 sm:px-8',
+        'relative overflow-x-hidden px-4 py-4 antialiased transition-colors duration-500 sm:px-8',
+        isToolboxLanding ? 'h-screen overflow-hidden' : 'min-h-screen',
         isNight ? 'bg-[#050b18] text-slate-50' : 'bg-page-grid text-zinc-950',
       )}
     >
@@ -174,7 +184,9 @@ function App() {
           'pointer-events-none absolute inset-0 z-0 transition-opacity duration-500',
           isNight
             ? 'bg-[linear-gradient(180deg,rgba(5,10,24,0.78)_0%,rgba(6,12,28,0.54)_30%,rgba(5,12,28,0.3)_54%,rgba(5,12,28,0.82)_100%)]'
-            : 'bg-[linear-gradient(180deg,rgba(236,243,252,0.82)_0%,rgba(244,248,255,0.62)_36%,rgba(248,251,255,0.18)_58%,rgba(238,244,251,0.86)_100%)]',
+            : isToolboxLanding
+              ? 'bg-[linear-gradient(180deg,rgba(247,250,255,0.94)_0%,rgba(239,246,255,0.86)_42%,rgba(234,242,252,0.92)_100%)]'
+              : 'bg-[linear-gradient(180deg,rgba(236,243,252,0.82)_0%,rgba(244,248,255,0.62)_36%,rgba(248,251,255,0.18)_58%,rgba(238,244,251,0.86)_100%)]',
         )}
       />
       <div
@@ -195,83 +207,22 @@ function App() {
         </div>
       )}
 
-      <nav
-        className={cx(
-          'sticky top-4 z-20 mx-auto mb-6 flex min-h-17 w-full max-w-[1428px] items-center justify-between gap-4 px-4 py-3 backdrop-blur-xl max-lg:static max-lg:flex-col max-lg:items-start',
-          isNight
-            ? 'rounded-[28px] border border-white/10 bg-white/6 shadow-[0_24px_60px_rgba(2,8,24,0.4),inset_0_1px_0_rgba(255,255,255,0.08)]'
-            : 'rounded-full border border-slate-300/70 bg-white/80 shadow-float max-lg:rounded-[22px]',
-        )}
-        aria-label="主导航"
-      >
-        <button
-          className={cx(
-            'flex items-center gap-3 rounded-full border-0 bg-transparent px-2 py-1 text-lg font-bold tracking-tight transition-all duration-200 ease-out hover:-translate-y-0.5',
-            isNight ? 'text-white hover:text-blue-300' : 'text-zinc-900 hover:text-blue-700',
-          )}
-          type="button"
-          onClick={() => navigateToPage('home')}
-        >
-          <span className="size-2.5 rounded-full bg-blue-500 shadow-[0_0_0_6px_rgba(79,125,243,0.14)]" />
-          <span
-            className={cx(
-              'grid size-7 place-items-center overflow-hidden rounded-lg shadow-sm',
-              isNight ? 'border border-white/12 bg-white/8' : 'border border-blue-200 bg-sky-50',
-            )}
-          >
-            <img className="size-full object-cover" src={appIconSrc} alt="DocKit 图标" />
-          </span>
-          <strong>DocKit</strong>
-        </button>
-        <div
-          className={cx(
-            'flex gap-2 overflow-x-auto p-1 max-lg:w-full',
-            isNight
-              ? 'rounded-full border border-white/8 bg-white/[0.03]'
-              : 'rounded-full border border-slate-200 bg-slate-50/70',
-          )}
-        >
-          {navItems.map((item) => (
-            <button
-              key={item.id}
-              className={cx(
-                buttonClasses.navItem,
-                currentPage === item.id
-                  ? isNight
-                    ? 'bg-white/8 text-blue-300 shadow-[inset_0_0_0_1px_rgba(96,165,250,0.24)]'
-                    : 'bg-blue-50 text-blue-700 shadow-[inset_0_0_0_1px_#d5e4fb]'
-                  : isNight
-                    ? 'text-slate-200 hover:bg-white/6 hover:text-white'
-                    : 'text-slate-600',
-              )}
-              type="button"
-              onClick={() => navigateToPage(item.id)}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-        <button
-          type="button"
-          onClick={() => setThemeMode(isNight ? 'day' : 'night')}
-          className={cx(
-            'inline-flex min-h-11 items-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold tracking-tight transition-all duration-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400',
-            isNight
-              ? 'border border-white/12 bg-white/8 text-slate-100 hover:bg-white/12'
-              : 'border border-slate-200 bg-white/78 text-slate-700 shadow-soft hover:-translate-y-0.5 hover:border-blue-200 hover:text-blue-700',
-          )}
-        >
-          {isNight ? <SunMedium size={16} /> : <CloudMoon size={16} />}
-          {isNight ? '切换白天' : '切换夜晚'}
-        </button>
-      </nav>
+      <NavBar
+        appIconSrc={appIconSrc}
+        currentPage={currentPage}
+        isCompact={isCompactNav}
+        navItems={navItems}
+        themeMode={themeMode}
+        onNavigate={navigateToPage}
+        onToggleTheme={() => setThemeMode(isNight ? 'day' : 'night')}
+      />
 
       <section className="relative z-10 mx-auto w-full max-w-[1440px]">
         {currentPage === 'home' && (
           <HomePage
             themeMode={themeMode}
-            onOpenToolbox={() => navigateToPage('toolbox')}
-            onOpenStamp={() => openTool('stamp')}
+            onNavigate={navigateToPage}
+            onOpenTool={openTool}
           />
         )}
 
@@ -281,10 +232,13 @@ function App() {
 
         {currentPage === 'toolbox' && (
           <ToolboxPage
+            appIconSrc={appIconSrc}
             themeMode={themeMode}
             activeTool={activeTool}
             activeToolMeta={activeToolMeta}
+            tools={tools}
             onBackToToolbox={() => navigateToPage('toolbox')}
+            onOpenHome={() => navigateToPage('home')}
             onOpenTool={openTool}
           />
         )}
@@ -306,51 +260,55 @@ function App() {
         {currentPage === 'roadmap' && <RoadmapPage themeMode={themeMode} />}
       </section>
 
-      <footer
-        className={cx(
-          'relative z-10 mx-auto mt-13 flex flex-wrap justify-center gap-4.5 text-sm font-semibold',
-          isNight ? 'text-slate-300/78' : 'text-slate-500',
-        )}
-      >
-        <span className="inline-flex items-center gap-2">
-          <Sparkles size={16} />
-          100% 本地运行
-        </span>
-        <span className="inline-flex items-center gap-2">
-          <GitBranch size={16} />
-          Vite + React + Tailwind
-        </span>
-        <span className="inline-flex items-center gap-2">
-          <HeartHandshake size={16} />
-          隐私友好的文书工具
-        </span>
-      </footer>
+      {currentPage !== 'toolbox' && (
+        <>
+          <footer
+            className={cx(
+              'relative z-10 mx-auto mt-13 flex flex-wrap justify-center gap-4.5 text-sm font-semibold',
+              isNight ? 'text-slate-300/78' : 'text-slate-500',
+            )}
+          >
+            <span className="inline-flex items-center gap-2">
+              <Sparkles size={16} />
+              100% 本地运行
+            </span>
+            <span className="inline-flex items-center gap-2">
+              <GitBranch size={16} />
+              Vite + React + Tailwind
+            </span>
+            <span className="inline-flex items-center gap-2">
+              <HeartHandshake size={16} />
+              隐私友好的文书工具
+            </span>
+          </footer>
 
-      <button
-        type="button"
-        aria-label="返回顶部"
-        onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-        className={cx(
-          'fixed right-4 bottom-24 z-30 inline-flex size-12 items-center justify-center rounded-full border shadow-float backdrop-blur-xl transition-all duration-200 hover:-translate-y-0.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400 sm:right-6',
-          isNight
-            ? 'border-white/12 bg-white/10 text-slate-100 hover:bg-white/14 hover:text-blue-300'
-            : 'border-slate-200 bg-white/88 text-slate-600 hover:border-blue-200 hover:bg-white hover:text-blue-700',
-        )}
-      >
-        <ArrowUp size={18} />
-      </button>
+          <button
+            type="button"
+            aria-label="返回顶部"
+            onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+            className={cx(
+              'fixed right-4 bottom-24 z-30 inline-flex size-12 items-center justify-center rounded-full border shadow-float backdrop-blur-xl transition-all duration-200 hover:-translate-y-0.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400 sm:right-6',
+              isNight
+                ? 'border-white/12 bg-white/10 text-slate-100 hover:bg-white/14 hover:text-blue-300'
+                : 'border-slate-200 bg-white/88 text-slate-600 hover:border-blue-200 hover:bg-white hover:text-blue-700',
+            )}
+          >
+            <ArrowUp size={18} />
+          </button>
+        </>
+      )}
     </main>
   )
 }
 
 function HomePage({
   themeMode,
-  onOpenStamp,
-  onOpenToolbox,
+  onNavigate,
+  onOpenTool,
 }: {
   themeMode: ThemeMode
-  onOpenStamp: () => void
-  onOpenToolbox: () => void
+  onNavigate: (pageId: PageId) => void
+  onOpenTool: (toolId: ToolId) => void
 }) {
   const isNight = themeMode === 'night'
 
@@ -397,7 +355,7 @@ function HomePage({
                 'border-blue-400/30 bg-[linear-gradient(180deg,rgba(63,112,255,0.96)_0%,rgba(36,84,230,0.94)_100%)] text-white shadow-[0_14px_36px_rgba(59,106,255,0.32)] hover:bg-[linear-gradient(180deg,rgba(74,122,255,1)_0%,rgba(44,94,238,1)_100%)]',
             )}
             type="button"
-            onClick={onOpenStamp}
+            onClick={() => (isNight ? onNavigate('toolbox') : onOpenTool('stamp'))}
           >
             <Stamp size={17} />
             {isNight ? '进入工具箱' : '打开盖章工具'}
@@ -409,7 +367,7 @@ function HomePage({
                 'border border-white/14 bg-white/8 text-slate-100 shadow-[0_14px_32px_rgba(7,14,30,0.28)] hover:border-blue-300/26 hover:bg-white/10 hover:text-white',
             )}
             type="button"
-            onClick={isNight ? onOpenStamp : onOpenToolbox}
+            onClick={() => onNavigate(isNight ? 'capabilities' : 'toolbox')}
           >
             {isNight ? <BookOpen size={17} /> : <Hammer size={17} />}
             {isNight ? '查看能力' : '查看工具箱'}
@@ -421,14 +379,14 @@ function HomePage({
                 'border border-white/14 bg-white/8 text-slate-100 shadow-[0_14px_32px_rgba(7,14,30,0.28)] hover:border-blue-300/26 hover:bg-white/10 hover:text-white',
             )}
             type="button"
-            onClick={() => window.location.hash = 'roadmap'}
+            onClick={() => onNavigate(isNight ? 'guide' : 'roadmap')}
           >
             <BookOpen size={17} />
             {isNight ? '使用教程' : '版本计划'}
           </button>
         </div>
 
-        <FeatureOrbit themeMode={themeMode} onOpenToolbox={onOpenToolbox} onOpenStamp={onOpenStamp} />
+        <FeatureOrbit themeMode={themeMode} onNavigate={onNavigate} onOpenTool={onOpenTool} />
       </section>
     </section>
   )
@@ -436,12 +394,12 @@ function HomePage({
 
 function FeatureOrbit({
   themeMode,
-  onOpenStamp,
-  onOpenToolbox,
+  onNavigate,
+  onOpenTool,
 }: {
   themeMode: ThemeMode
-  onOpenStamp: () => void
-  onOpenToolbox: () => void
+  onNavigate: (pageId: PageId) => void
+  onOpenTool: (toolId: ToolId) => void
 }) {
   const isNight = themeMode === 'night'
   const floatingChips: FloatingChipsCloudItem[] = [
@@ -451,7 +409,7 @@ function FeatureOrbit({
       positionClass: 'top-[22%] left-[2%]',
       desktopPreset: 'driftA',
       mobilePreset: 'mobileA',
-      onClick: onOpenToolbox,
+      onClick: () => onOpenTool('sign'),
     },
     {
       label: '页面提取',
@@ -459,7 +417,7 @@ function FeatureOrbit({
       positionClass: 'top-[20%] left-[40%]',
       desktopPreset: 'driftB',
       mobilePreset: 'mobileB',
-      onClick: onOpenToolbox,
+      onClick: () => onOpenTool('extract'),
     },
     {
       label: '压缩 PDF',
@@ -467,7 +425,7 @@ function FeatureOrbit({
       positionClass: 'top-[20%] left-[79%]',
       desktopPreset: 'driftC',
       mobilePreset: 'mobileC',
-      onClick: onOpenToolbox,
+      onClick: () => onNavigate('roadmap'),
     },
     {
       label: 'PDF 合并',
@@ -475,7 +433,7 @@ function FeatureOrbit({
       positionClass: 'top-[38%] left-[18%]',
       desktopPreset: 'driftD',
       mobilePreset: 'mobileD',
-      onClick: onOpenToolbox,
+      onClick: () => onOpenTool('merge'),
     },
     {
       label: '批量处理',
@@ -483,7 +441,7 @@ function FeatureOrbit({
       positionClass: 'top-[37%] left-[61%]',
       desktopPreset: 'driftE',
       mobilePreset: 'mobileA',
-      onClick: onOpenToolbox,
+      onClick: () => onNavigate('roadmap'),
     },
     {
       label: '盖章工具',
@@ -491,7 +449,7 @@ function FeatureOrbit({
       positionClass: 'top-[60%] left-[10%]',
       desktopPreset: 'driftF',
       mobilePreset: 'mobileB',
-      onClick: onOpenStamp,
+      onClick: () => onOpenTool('stamp'),
     },
     {
       label: '加密保护',
@@ -499,20 +457,18 @@ function FeatureOrbit({
       positionClass: 'top-[58%] left-[64%]',
       desktopPreset: 'driftG',
       mobilePreset: 'mobileC',
-      onClick: onOpenToolbox,
+      onClick: () => onNavigate('roadmap'),
     },
   ]
 
   return (
     <section className="mt-3 w-full max-w-5xl">
-      <button
-        type="button"
-        onClick={onOpenToolbox}
+      <div
         className={cx(
-          'relative mx-auto flex min-h-14 w-full max-w-3xl items-center justify-between gap-4 rounded-full px-5 text-left transition-all duration-300 hover:-translate-y-0.5 sm:px-7',
+          'relative mx-auto flex min-h-14 w-full max-w-3xl items-center justify-between gap-4 rounded-full px-5 text-left transition-all duration-300 sm:px-7',
           isNight
-            ? 'border border-white/14 bg-[#111d36]/78 shadow-[0_18px_54px_rgba(4,10,28,0.36),inset_0_1px_0_rgba(255,255,255,0.06)] hover:bg-[#162545]/82'
-            : 'border border-white/80 bg-white/92 shadow-soft hover:shadow-float',
+            ? 'border border-white/14 bg-[#111d36]/78 shadow-[0_18px_54px_rgba(4,10,28,0.36),inset_0_1px_0_rgba(255,255,255,0.06)]'
+            : 'border border-white/80 bg-white/92 shadow-soft',
         )}
       >
         <span
@@ -525,14 +481,49 @@ function FeatureOrbit({
         </span>
         <span
           className={cx(
-            'flex-1 text-center text-base font-medium tracking-tight sm:text-[1.05rem]',
+            'flex flex-1 flex-wrap items-center justify-center gap-1.5 text-center text-base font-medium tracking-tight sm:text-[1.05rem]',
             isNight ? 'text-slate-300/80' : 'text-slate-400',
           )}
         >
-          试试：
-          <span className="mx-1 text-blue-700">合并 PDF</span>/
-          <span className="mx-1 text-blue-700">插入签名</span>/
-          <span className="mx-1 text-blue-700">提取页面</span>
+          <span>试试：</span>
+          <button
+            type="button"
+            onClick={() => onOpenTool('merge')}
+            className={cx(
+              'rounded-full px-3 py-1 font-semibold transition-all duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400',
+              isNight
+                ? 'text-blue-200 hover:bg-blue-400/18 hover:text-white active:bg-blue-400/24'
+                : 'text-blue-700 hover:bg-blue-50 hover:text-blue-800 active:bg-blue-100',
+            )}
+          >
+            合并 PDF
+          </button>
+          <span>/</span>
+          <button
+            type="button"
+            onClick={() => onOpenTool('sign')}
+            className={cx(
+              'rounded-full px-3 py-1 font-semibold transition-all duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400',
+              isNight
+                ? 'text-blue-200 hover:bg-blue-400/18 hover:text-white active:bg-blue-400/24'
+                : 'text-blue-700 hover:bg-blue-50 hover:text-blue-800 active:bg-blue-100',
+            )}
+          >
+            插入签名
+          </button>
+          <span>/</span>
+          <button
+            type="button"
+            onClick={() => onOpenTool('extract')}
+            className={cx(
+              'rounded-full px-3 py-1 font-semibold transition-all duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400',
+              isNight
+                ? 'text-blue-200 hover:bg-blue-400/18 hover:text-white active:bg-blue-400/24'
+                : 'text-blue-700 hover:bg-blue-50 hover:text-blue-800 active:bg-blue-100',
+            )}
+          >
+            提取页面
+          </button>
         </span>
         <span
           className={cx(
@@ -542,7 +533,7 @@ function FeatureOrbit({
         >
           <ArrowRight size={18} />
         </span>
-      </button>
+      </div>
 
       <div className="relative mt-6">
         <div
@@ -575,7 +566,7 @@ function FeatureOrbit({
           <FloatWrapper preset="soft">
             <button
               type="button"
-              onClick={onOpenStamp}
+              onClick={() => onOpenTool('stamp')}
               className={cx(
                 'inline-flex items-center gap-2 rounded-full px-6 py-3 text-sm font-semibold tracking-tight transition-colors duration-300',
                 isNight
@@ -658,121 +649,6 @@ function CapabilitiesPage({
   )
 }
 
-function ToolboxPage({
-  themeMode,
-  activeTool,
-  activeToolMeta,
-  onBackToToolbox,
-  onOpenTool,
-}: {
-  themeMode: ThemeMode
-  activeTool: ToolId | null
-  activeToolMeta: ToolMeta | null
-  onBackToToolbox: () => void
-  onOpenTool: (toolId: ToolId) => void
-}) {
-  const isNight = themeMode === 'night'
-
-  if (activeTool === 'stamp' && activeToolMeta) {
-    return (
-      <section className="pt-7">
-        <div className="mb-3.5 flex items-center justify-between gap-4 max-lg:flex-col max-lg:items-start">
-          <button
-            className={cx(
-              buttonClasses.subtlePill,
-              isNight &&
-                'border border-white/14 bg-white/8 text-slate-100 shadow-[0_14px_32px_rgba(7,14,30,0.28)] hover:border-blue-300/26 hover:bg-white/10 hover:text-white',
-            )}
-            type="button"
-            onClick={onBackToToolbox}
-          >
-            <Home size={17} />
-            返回工具箱
-          </button>
-          <div>
-            <span className="text-xs font-bold text-blue-600">{activeToolMeta.state}</span>
-            <h1
-              className={cx(
-                'text-[38px] font-extrabold tracking-[-0.045em]',
-                isNight ? 'text-white' : 'text-slate-900',
-              )}
-            >
-              {activeToolMeta.name}
-            </h1>
-          </div>
-        </div>
-        <PdfStampTool />
-      </section>
-    )
-  }
-
-  if (activeTool === 'sign' && activeToolMeta) {
-    return (
-      <section className="pt-7">
-        <div className="mb-3.5 flex items-center justify-between gap-4 max-lg:flex-col max-lg:items-start">
-          <button
-            className={cx(
-              buttonClasses.subtlePill,
-              isNight &&
-                'border border-white/14 bg-white/8 text-slate-100 shadow-[0_14px_32px_rgba(7,14,30,0.28)] hover:border-blue-300/26 hover:bg-white/10 hover:text-white',
-            )}
-            type="button"
-            onClick={onBackToToolbox}
-          >
-            <Home size={17} />
-            返回工具箱
-          </button>
-          <div>
-            <span className="text-xs font-bold text-blue-600">可用</span>
-            <h1
-              className={cx(
-                'text-[38px] font-extrabold tracking-[-0.045em]',
-                isNight ? 'text-white' : 'text-slate-900',
-              )}
-            >
-              {activeToolMeta.name}
-            </h1>
-          </div>
-        </div>
-        <SignatureCutoutTool />
-      </section>
-    )
-  }
-
-  return (
-    <section className="mx-auto max-w-6xl px-4 py-8">
-      <SectionHeading
-        eyebrow="TOOLBOX"
-        title="工具箱"
-        description="工具箱已经独立成单独页面，首页不再展示这块内容。已完成工具可直接进入，未完成工具统一先落到规划状态。"
-        aside={
-          <span className={cx('text-sm font-semibold', isNight ? 'text-slate-300/78' : 'text-slate-500')}>
-            本地处理 · 逐步扩展
-          </span>
-        }
-        className="mb-5"
-      />
-
-      <div className="grid grid-cols-2 gap-3.5 max-lg:grid-cols-1">
-        {tools.map((tool) => (
-          <ActionCard
-            key={tool.id}
-            icon={<ToolIcon toolId={tool.id} />}
-            heading={tool.name}
-            description={tool.description}
-            badge={tool.state}
-            className={
-              isNight
-                ? 'border-white/10 bg-white/6 text-slate-200 shadow-[0_18px_44px_rgba(5,10,24,0.3)] hover:border-blue-300/18 hover:bg-white/8'
-                : undefined
-            }
-            onClick={() => onOpenTool(tool.id)}
-          />
-        ))}
-      </div>
-    </section>
-  )
-}
 
 function RoadmapPage({ themeMode }: { themeMode: ThemeMode }) {
   const isNight = themeMode === 'night'
@@ -852,25 +728,6 @@ function UnderConstructionPage({
       </SurfacePanel>
     </section>
   )
-}
-
-function ToolIcon({ toolId }: { toolId: ToolId }) {
-  switch (toolId) {
-    case 'stamp':
-      return <Stamp size={22} />
-    case 'merge':
-      return <FileArchive size={22} />
-    case 'extract':
-      return <BookOpen size={22} />
-    case 'convert':
-      return <FileStack size={22} />
-    case 'sign':
-      return <Sparkles size={22} />
-    case 'ocr':
-      return <Hammer size={22} />
-    default:
-      return <Hammer size={22} />
-  }
 }
 
 export default App

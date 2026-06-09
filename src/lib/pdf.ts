@@ -40,6 +40,33 @@ export async function renderPdfPreviews(pdfBytes: ArrayBuffer, maxWidth = 900) {
   return pages
 }
 
+export async function renderPdfThumbnail(pdfBytes: ArrayBuffer, maxWidth = 180) {
+  const loadingTask = pdfjs.getDocument({ data: pdfBytes.slice(0) })
+
+  try {
+    const pdfDocument = await loadingTask.promise
+    const page = await pdfDocument.getPage(1)
+    const baseViewport = page.getViewport({ scale: 1 })
+    const scale = Math.min(maxWidth / baseViewport.width, 1.5)
+    const viewport = page.getViewport({ scale })
+    const canvas = document.createElement('canvas')
+    const context = canvas.getContext('2d')
+
+    if (!context) {
+      throw new Error('当前浏览器不支持 PDF 缩略图渲染。')
+    }
+
+    canvas.width = Math.floor(viewport.width)
+    canvas.height = Math.floor(viewport.height)
+
+    await page.render({ canvas, canvasContext: context, viewport }).promise
+
+    return canvas.toDataURL('image/png')
+  } finally {
+    await loadingTask.destroy()
+  }
+}
+
 export async function stampPdf(pdfBytes: ArrayBuffer, placements: StampPlacement[]) {
   const pdfDocument = await PDFDocument.load(pdfBytes.slice(0))
   const pages = pdfDocument.getPages()

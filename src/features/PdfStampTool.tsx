@@ -542,16 +542,16 @@ export function PdfStampTool() {
 
   async function handleExport() {
     if (!pdf || placements.length === 0) {
-      setNotice('???????????')
+      setNotice('\u8bf7\u5148\u4e0a\u4f20 PDF \u5e76\u653e\u7f6e\u5370\u7ae0\u3002')
       return
     }
 
     if (placements.some((placement) => !placement.imageDataUrl)) {
-      setNotice('???????????????????????????')
+      setNotice('\u5b58\u5728\u672a\u80fd\u6062\u590d\u56fe\u50cf\u6570\u636e\u7684\u5370\u7ae0\uff0c\u8bf7\u91cd\u65b0\u9009\u62e9\u5370\u7ae0\u6216\u7b7e\u540d\u3002')
       return
     }
 
-    setBusyLabel('?????? PDF')
+    setBusyLabel('\u6b63\u5728\u5bfc\u51fa PDF')
     try {
       const normalizedPlacements = placements.map((placement) => {
         const preview = pages.find((page) => page.pageNumber === placement.pageNumber)

@@ -42,3 +42,16 @@ export type SignatureDraftRecord = {
   width: number
   height: number
 }
+
+export type PageId = 'home' | 'capabilities' | 'toolbox' | 'guide' | 'drafts' | 'roadmap'
+
+export type ToolId = 'stamp' | 'merge' | 'extract' | 'convert' | 'sign' | 'ocr'
+
+export type ToolStatus = '可用' | '规划中'
+
+export type ToolMeta = {
+  id: ToolId
+  name: string
+  description: string
+  state: ToolStatus
+}
