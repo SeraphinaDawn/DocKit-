@@ -1,4 +1,4 @@
-import { PDFDocument } from 'pdf-lib'
+import { PDFDocument, degrees } from 'pdf-lib'
 import * as pdfjs from 'pdfjs-dist'
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import type { PdfPagePreview, StampPlacement } from '../types'
@@ -56,16 +56,13 @@ export async function stampPdf(
       return
     }
 
-    const ratio = stampImage.height / stampImage.width
-    const width = placement.width
-    const height = width * ratio
-
     page.drawImage(stampImage, {
       x: placement.x,
       y: placement.y,
-      width,
-      height,
+      width: placement.width,
+      height: placement.height,
       opacity: placement.opacity,
+      rotate: degrees(placement.rotation),
     })
   })
 

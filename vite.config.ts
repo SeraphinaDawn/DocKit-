@@ -9,7 +9,7 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg'],
+      includeAssets: ['generated-image.ico', 'generated-image.png'],
       manifest: {
         name: 'DocKit 本地文书工具箱',
         short_name: 'DocKit',
@@ -21,14 +21,14 @@ export default defineConfig({
         start_url: '/',
         icons: [
           {
-            src: '/pwa-192.svg',
+            src: '/generated-image.png',
             sizes: '192x192',
-            type: 'image/svg+xml',
+            type: 'image/png',
           },
           {
-            src: '/pwa-512.svg',
+            src: '/generated-image.png',
             sizes: '512x512',
-            type: 'image/svg+xml',
+            type: 'image/png',
           },
         ],
       },

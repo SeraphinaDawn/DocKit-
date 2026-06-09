@@ -20,9 +20,14 @@ export async function removeLightBackground(dataUrl: string, threshold: number) 
     const blue = pixels[index + 2]
     const brightness = (red + green + blue) / 3
     const isLowSaturation = Math.max(red, green, blue) - Math.min(red, green, blue) < 32
+    const strongRed = red > 105 && red > green * 1.05 && red > blue * 1.05
 
-    if (brightness >= threshold && isLowSaturation) {
+    if (brightness >= Math.max(threshold, 242) && isLowSaturation) {
       pixels[index + 3] = 0
+    } else if (strongRed) {
+      pixels[index + 3] = Math.max(140, 255 - Math.max(0, brightness - 150) * 2)
+    } else if (brightness > threshold - 10) {
+      pixels[index + 3] = Math.min(pixels[index + 3], 20)
     }
   }
 

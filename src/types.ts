@@ -6,10 +6,13 @@ export type PdfPagePreview = {
 }
 
 export type StampPlacement = {
+  id: string
   pageNumber: number
   x: number
   y: number
   width: number
+  height: number
+  rotation: number
   opacity: number
 }
 
@@ -22,5 +25,6 @@ export type DraftRecord = {
   stampName?: string
   stampBytes?: ArrayBuffer
   threshold: number
+  stampScale: number
   placements: StampPlacement[]
 }
