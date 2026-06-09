@@ -40,20 +40,22 @@ export async function renderPdfPreviews(pdfBytes: ArrayBuffer, maxWidth = 900) {
   return pages
 }
 
-export async function stampPdf(
-  pdfBytes: ArrayBuffer,
-  stampPngDataUrl: string,
-  placements: StampPlacement[],
-) {
+export async function stampPdf(pdfBytes: ArrayBuffer, placements: StampPlacement[]) {
   const pdfDocument = await PDFDocument.load(pdfBytes.slice(0))
-  const stampImage = await pdfDocument.embedPng(stampPngDataUrl)
   const pages = pdfDocument.getPages()
+  const imageCache = new Map<string, Awaited<ReturnType<typeof pdfDocument.embedPng>>>()
 
-  placements.forEach((placement) => {
+  for (const placement of placements) {
     const page = pages[placement.pageNumber - 1]
 
     if (!page) {
-      return
+      continue
+    }
+
+    let stampImage = imageCache.get(placement.imageDataUrl)
+    if (!stampImage) {
+      stampImage = await pdfDocument.embedPng(placement.imageDataUrl)
+      imageCache.set(placement.imageDataUrl, stampImage)
     }
 
     page.drawImage(stampImage, {
@@ -64,7 +66,7 @@ export async function stampPdf(
       opacity: placement.opacity,
       rotate: degrees(placement.rotation),
     })
-  })
+  }
 
   return pdfDocument.save()
 }

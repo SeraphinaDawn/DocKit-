@@ -1,4 +1,5 @@
 import {
+  ArrowUp,
   ArrowRight,
   BookOpen,
   CloudMoon,
@@ -33,6 +34,7 @@ import {
 } from './components/ui'
 import { buttonClasses, cx } from './components/ui-helpers'
 import { PdfStampTool } from './features/PdfStampTool'
+import { SignatureCutoutTool } from './features/SignatureCutoutTool'
 
 type PageId = 'home' | 'capabilities' | 'toolbox' | 'guide' | 'drafts' | 'roadmap'
 type ToolId = 'stamp' | 'merge' | 'extract' | 'convert' | 'sign' | 'ocr'
@@ -87,7 +89,7 @@ const tools: ToolMeta[] = [
     id: 'sign',
     name: '手写签名',
     description: '生成透明背景签名图，方便贴入文书。',
-    state: '规划中',
+    state: '可用',
   },
   {
     id: 'ocr',
@@ -115,9 +117,9 @@ function App() {
     const handleHashChange = () => {
       const nextHash = window.location.hash.replace('#', '') as PageId | ToolId | ''
 
-      if (nextHash === 'stamp') {
+      if (nextHash === 'stamp' || nextHash === 'sign') {
         setCurrentPage('toolbox')
-        setActiveTool('stamp')
+        setActiveTool(nextHash)
         return
       }
 
@@ -147,7 +149,7 @@ function App() {
   }
 
   function openTool(toolId: ToolId) {
-    if (toolId === 'stamp') {
+    if (toolId === 'stamp' || toolId === 'sign') {
       window.location.hash = toolId
       return
     }
@@ -323,6 +325,20 @@ function App() {
           隐私友好的文书工具
         </span>
       </footer>
+
+      <button
+        type="button"
+        aria-label="返回顶部"
+        onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+        className={cx(
+          'fixed right-4 bottom-24 z-30 inline-flex size-12 items-center justify-center rounded-full border shadow-float backdrop-blur-xl transition-all duration-200 hover:-translate-y-0.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400 sm:right-6',
+          isNight
+            ? 'border-white/12 bg-white/10 text-slate-100 hover:bg-white/14 hover:text-blue-300'
+            : 'border-slate-200 bg-white/88 text-slate-600 hover:border-blue-200 hover:bg-white hover:text-blue-700',
+        )}
+      >
+        <ArrowUp size={18} />
+      </button>
     </main>
   )
 }
@@ -686,6 +702,39 @@ function ToolboxPage({
           </div>
         </div>
         <PdfStampTool />
+      </section>
+    )
+  }
+
+  if (activeTool === 'sign' && activeToolMeta) {
+    return (
+      <section className="pt-7">
+        <div className="mb-3.5 flex items-center justify-between gap-4 max-lg:flex-col max-lg:items-start">
+          <button
+            className={cx(
+              buttonClasses.subtlePill,
+              isNight &&
+                'border border-white/14 bg-white/8 text-slate-100 shadow-[0_14px_32px_rgba(7,14,30,0.28)] hover:border-blue-300/26 hover:bg-white/10 hover:text-white',
+            )}
+            type="button"
+            onClick={onBackToToolbox}
+          >
+            <Home size={17} />
+            返回工具箱
+          </button>
+          <div>
+            <span className="text-xs font-bold text-blue-600">可用</span>
+            <h1
+              className={cx(
+                'text-[38px] font-extrabold tracking-[-0.045em]',
+                isNight ? 'text-white' : 'text-slate-900',
+              )}
+            >
+              {activeToolMeta.name}
+            </h1>
+          </div>
+        </div>
+        <SignatureCutoutTool />
       </section>
     )
   }

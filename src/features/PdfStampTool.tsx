@@ -4,6 +4,8 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUp,
+  ChevronLeft,
+  ChevronRight,
   Download,
   FileDown,
   FileText,
@@ -13,6 +15,7 @@ import {
   RotateCw,
   Save,
   Search,
+  Sparkles,
   Trash2,
   Upload,
   ZoomIn,
@@ -30,9 +33,18 @@ import {
 import { buttonClasses, cx } from '../components/ui-helpers'
 import { downloadBytes, formatBytes, readFileAsArrayBuffer, readFileAsDataUrl } from '../lib/files'
 import { renderPdfPreviews, stampPdf } from '../lib/pdf'
-import { deleteDraft, getDraft, listDrafts, saveDraft, type DraftSummary } from '../lib/storage'
-import { removeLightBackground } from '../lib/stamp'
-import type { DraftRecord, PdfPagePreview, StampPlacement } from '../types'
+import {
+  deleteDraft,
+  getDraft,
+  getSignatureDraft,
+  listDrafts,
+  listSignatureDrafts,
+  saveDraft,
+  type DraftSummary,
+  type SignatureDraftSummary,
+} from '../lib/storage'
+import { loadImage, removeLightBackground } from '../lib/stamp'
+import type { DraftRecord, PdfPagePreview, StampPlacement, StampSourceKind } from '../types'
 
 const defaultThreshold = 236
 const defaultStampScale = 1
@@ -46,6 +58,7 @@ type PdfSource = {
 }
 
 type StampSource = {
+  kind: StampSourceKind
   name: string
   size: number
   bytes?: ArrayBuffer
@@ -61,6 +74,14 @@ type DragState = {
   originY: number
 }
 
+type SignatureDraftPreview = SignatureDraftSummary & {
+  previewUrl: string
+}
+
+type PlacementSnapshot = Omit<StampPlacement, 'imageDataUrl'> & {
+  imageDataUrl?: string
+}
+
 export function PdfStampTool() {
   const [pdf, setPdf] = useState<PdfSource | null>(null)
   const [stamp, setStamp] = useState<StampSource | null>(null)
@@ -72,10 +93,13 @@ export function PdfStampTool() {
   const [threshold, setThreshold] = useState(defaultThreshold)
   const [stampScale, setStampScale] = useState(defaultStampScale)
   const [drafts, setDrafts] = useState<DraftSummary[]>([])
+  const [signatureDrafts, setSignatureDrafts] = useState<SignatureDraftPreview[]>([])
   const [isDragging, setIsDragging] = useState(false)
   const [busyLabel, setBusyLabel] = useState('')
-  const [notice, setNotice] = useState('所有文件仅在当前设备处理，不会上传到服务器。')
+  const [notice, setNotice] = useState('所有文件都只在当前设备本地处理，不会上传到服务器。')
   const [dragState, setDragState] = useState<DragState | null>(null)
+  const [currentPreviewPage, setCurrentPreviewPage] = useState(1)
+  const [pageJumpValue, setPageJumpValue] = useState('1')
   const pdfInputRef = useRef<HTMLInputElement>(null)
   const stampInputRef = useRef<HTMLInputElement>(null)
   const stageRefs = useRef<Record<number, HTMLDivElement | null>>({})
@@ -101,37 +125,65 @@ export function PdfStampTool() {
       return '等待上传 PDF'
     }
     if (!stampPreviewUrl) {
-      return '等待上传印章图片'
+      return '等待上传印章或选择签名'
     }
     if (placements.length === 0) {
-      return '可以开始落章'
+      return '可以开始盖章'
     }
     return `已放置 ${placements.length} 枚印章`
   }, [busyLabel, pdf, placements.length, stampPreviewUrl])
 
-  const canExport = Boolean(pdf && stampPreviewUrl && placements.length > 0)
+  const canExport = Boolean(pdf && placements.length > 0)
   const canPlaceStamp = Boolean(stampPreviewUrl && pages.length > 0)
 
   const stampAspectRatio = useMemo(() => {
     return stampNaturalSize.height / Math.max(stampNaturalSize.width, 1)
   }, [stampNaturalSize.height, stampNaturalSize.width])
 
+  const currentPage = useMemo(
+    () => pages.find((page) => page.pageNumber === currentPreviewPage) ?? pages[0] ?? null,
+    [currentPreviewPage, pages],
+  )
+
+  useEffect(() => {
+    const totalPages = pages.length
+    const safePage = totalPages > 0 ? clamp(currentPreviewPage, 1, totalPages) : 1
+    setCurrentPreviewPage(safePage)
+    setPageJumpValue(String(safePage))
+  }, [pages.length])
+
   useEffect(() => {
     let active = true
+    let previewsToCleanup: SignatureDraftPreview[] = []
 
-    void listDrafts().then((items) => {
-      if (active) {
-        setDrafts(items)
+    async function bootstrap() {
+      const [pdfDraftItems, signatureItems] = await Promise.all([
+        listDrafts(),
+        loadSignatureDraftPreviews(),
+      ])
+
+      if (!active) {
+        signatureItems.forEach((item) => URL.revokeObjectURL(item.previewUrl))
+        return
       }
-    })
+
+      previewsToCleanup = signatureItems
+      setDrafts(pdfDraftItems)
+      setSignatureDrafts(signatureItems)
+    }
+
+    void bootstrap()
 
     return () => {
       active = false
+      previewsToCleanup.forEach((item) => URL.revokeObjectURL(item.previewUrl))
     }
   }, [])
 
   useEffect(() => {
     if (!stamp) {
+      setStampPreviewUrl('')
+      setStampNaturalSize({ width: 1, height: 1 })
       return
     }
 
@@ -139,6 +191,27 @@ export function PdfStampTool() {
     const currentStamp = stamp
 
     async function processStamp() {
+      if (currentStamp.kind === 'signature-draft') {
+        setBusyLabel('正在载入签名')
+        try {
+          const image = await loadImage(currentStamp.rawDataUrl)
+          if (!cancelled) {
+            setStampPreviewUrl(currentStamp.rawDataUrl)
+            setStampNaturalSize({ width: image.naturalWidth, height: image.naturalHeight })
+            setNotice(`已载入签名：${currentStamp.name}`)
+          }
+        } catch (error) {
+          if (!cancelled) {
+            setNotice(error instanceof Error ? error.message : '签名草稿载入失败。')
+          }
+        } finally {
+          if (!cancelled) {
+            setBusyLabel('')
+          }
+        }
+        return
+      }
+
       setBusyLabel('正在去除印章白底')
       try {
         const processed = await removeLightBackground(currentStamp.rawDataUrl, threshold)
@@ -148,7 +221,9 @@ export function PdfStampTool() {
           setNotice(`已处理印章：${currentStamp.name}`)
         }
       } catch (error) {
-        setNotice(error instanceof Error ? error.message : '印章处理失败。')
+        if (!cancelled) {
+          setNotice(error instanceof Error ? error.message : '印章处理失败。')
+        }
       } finally {
         if (!cancelled) {
           setBusyLabel('')
@@ -165,6 +240,11 @@ export function PdfStampTool() {
 
   async function refreshDrafts() {
     setDrafts(await listDrafts())
+  }
+
+  async function refreshSignatureDrafts() {
+    signatureDrafts.forEach((item) => URL.revokeObjectURL(item.previewUrl))
+    setSignatureDrafts(await loadSignatureDraftPreviews())
   }
 
   async function handlePdfFile(file: File) {
@@ -201,10 +281,42 @@ export function PdfStampTool() {
         readFileAsDataUrl(file),
         readFileAsArrayBuffer(file),
       ])
-      setStamp({ name: file.name, size: file.size, rawDataUrl, bytes })
+      setStamp({
+        kind: 'upload',
+        name: file.name,
+        size: file.size,
+        rawDataUrl,
+        bytes,
+      })
       setNotice(`已载入印章：${file.name}`)
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '印章读取失败。')
+    } finally {
+      setBusyLabel('')
+    }
+  }
+
+  async function handleUseSignatureDraft(id: string) {
+    setBusyLabel('正在载入签名草稿')
+    try {
+      const draft = await getSignatureDraft(id)
+      if (!draft) {
+        setNotice('签名草稿不存在或已被删除。')
+        await refreshSignatureDrafts()
+        return
+      }
+
+      const rawDataUrl = await blobToDataUrl(new Blob([draft.pngBytes], { type: 'image/png' }))
+      setStamp({
+        kind: 'signature-draft',
+        name: draft.name,
+        size: draft.pngBytes.byteLength,
+        bytes: draft.pngBytes,
+        rawDataUrl,
+      })
+      setNotice(`已引用签名草稿：${draft.name}`)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '签名草稿载入失败。')
     } finally {
       setBusyLabel('')
     }
@@ -236,6 +348,7 @@ export function PdfStampTool() {
     return {
       id: crypto.randomUUID(),
       pageNumber,
+      imageDataUrl: stampPreviewUrl,
       x: clamp(x, 0, rect.width - width),
       y: clamp(y, 0, rect.height - height),
       width,
@@ -352,6 +465,7 @@ export function PdfStampTool() {
       updatedAt: Date.now(),
       pdfName: pdf.name,
       pdfBytes: pdf.bytes,
+      stampKind: stamp?.kind,
       stampName: stamp?.name,
       stampBytes: stamp?.bytes,
       threshold,
@@ -363,9 +477,9 @@ export function PdfStampTool() {
     try {
       await saveDraft(record)
       await refreshDrafts()
-      setNotice('草稿已保存到本机 IndexedDB。')
+      setNotice('PDF 盖章草稿已保存到本机。')
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : '草稿保存失败。')
+      setNotice(error instanceof Error ? error.message : 'PDF 盖章草稿保存失败。')
     } finally {
       setBusyLabel('')
     }
@@ -377,7 +491,7 @@ export function PdfStampTool() {
       const draft = await getDraft(id)
 
       if (!draft) {
-        setNotice('草稿不存在或已被删除。')
+        setNotice('PDF 盖章草稿不存在或已被删除。')
         return
       }
 
@@ -386,13 +500,16 @@ export function PdfStampTool() {
       setPages(renderedPages)
       setThreshold(draft.threshold)
       setStampScale(draft.stampScale ?? defaultStampScale)
-      setPlacements(draft.placements)
-      setSelectedPlacementId(draft.placements[0]?.id ?? null)
+      let fallbackImageDataUrl = ''
 
       if (draft.stampBytes && draft.stampName) {
-        const blob = new Blob([draft.stampBytes])
+        const blob = new Blob([draft.stampBytes], {
+          type: draft.stampKind === 'signature-draft' ? 'image/png' : undefined,
+        })
         const dataUrl = await blobToDataUrl(blob)
+        fallbackImageDataUrl = dataUrl
         setStamp({
+          kind: draft.stampKind ?? 'upload',
           name: draft.stampName,
           size: draft.stampBytes.byteLength,
           rawDataUrl: dataUrl,
@@ -400,12 +517,18 @@ export function PdfStampTool() {
         })
       } else {
         setStamp(null)
-        setStampPreviewUrl('')
       }
 
-      setNotice(`已载入草稿：${draft.name}`)
+      const restoredPlacements = normalizePlacements(
+        draft.placements as PlacementSnapshot[],
+        fallbackImageDataUrl,
+      )
+      setPlacements(restoredPlacements)
+      setSelectedPlacementId(restoredPlacements[0]?.id ?? null)
+
+      setNotice(`已载入 PDF 盖章草稿：${draft.name}`)
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : '草稿载入失败。')
+      setNotice(error instanceof Error ? error.message : 'PDF 盖章草稿载入失败。')
     } finally {
       setBusyLabel('')
     }
@@ -414,16 +537,21 @@ export function PdfStampTool() {
   async function handleDeleteDraft(id: string) {
     await deleteDraft(id)
     await refreshDrafts()
-    setNotice('草稿已删除。')
+    setNotice('PDF 盖章草稿已删除。')
   }
 
   async function handleExport() {
-    if (!pdf || !stampPreviewUrl || placements.length === 0) {
-      setNotice('请先放置至少一个印章。')
+    if (!pdf || placements.length === 0) {
+      setNotice('???????????')
       return
     }
 
-    setBusyLabel('正在合成 PDF')
+    if (placements.some((placement) => !placement.imageDataUrl)) {
+      setNotice('???????????????????????????')
+      return
+    }
+
+    setBusyLabel('?????? PDF')
     try {
       const normalizedPlacements = placements.map((placement) => {
         const preview = pages.find((page) => page.pageNumber === placement.pageNumber)
@@ -446,10 +574,10 @@ export function PdfStampTool() {
         }
       })
 
-      const stampedBytes = await stampPdf(pdf.bytes, stampPreviewUrl, normalizedPlacements)
+      const stampedBytes = await stampPdf(pdf.bytes, normalizedPlacements)
       const filename = `${pdf.name.replace(/\.pdf$/i, '')}-DocKit.pdf`
       downloadBytes(stampedBytes, filename, 'application/pdf')
-      setNotice(`已生成 ${filename}。`)
+      setNotice(`已生成 ${filename}`)
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'PDF 导出失败。')
     } finally {
@@ -475,7 +603,7 @@ export function PdfStampTool() {
 
   function handlePageClick(pageNumber: number, event: React.MouseEvent<HTMLDivElement>) {
     if (!canPlaceStamp) {
-      setNotice('请先载入印章图片后再落章。')
+      setNotice('请先上传印章图片，或点击“盖签名”选择一个透明签名草稿。')
       return
     }
 
@@ -543,6 +671,13 @@ export function PdfStampTool() {
     resizeSelectedPlacement(event.deltaY > 0 ? -10 : 10)
   }
 
+  function jumpToPage(pageNumber: number) {
+    const safePage = clamp(pageNumber, 1, pages.length || 1)
+
+    setCurrentPreviewPage(safePage)
+    setPageJumpValue(String(safePage))
+  }
+
   return (
     <section
       className={`rounded-2xl border border-slate-300/70 bg-white/70 p-4.5 shadow-float transition outline-offset-[-10px] ${
@@ -588,7 +723,7 @@ export function PdfStampTool() {
       />
 
       <div className="mb-3.5 flex items-start justify-between gap-4 max-lg:flex-col">
-        <SectionHeading eyebrow="当前工具" title="PDF 盖章去白底" titleAs="h2" />
+        <SectionHeading eyebrow="PDF STAMP TOOL" title="PDF 盖章去白底" titleAs="h2" />
         <InlineNotice icon={busyLabel ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}>
           {statusText}
         </InlineNotice>
@@ -606,11 +741,29 @@ export function PdfStampTool() {
         <button
           className={buttonClasses.toolbar}
           type="button"
+          onClick={async () => {
+            const latestDrafts = signatureDrafts.length > 0 ? signatureDrafts : await loadSignatureDraftPreviews()
+            if (signatureDrafts.length === 0 && latestDrafts.length > 0) {
+              setSignatureDrafts(latestDrafts)
+            }
+            if (latestDrafts.length === 0) {
+              setNotice('还没有可盖的签名草稿。请先去“手写签名”工具里保存至少一个透明签名草稿。')
+              return
+            }
+            setNotice('下方“签名草稿库”里可以预览并选择要盖上的签名。')
+          }}
+        >
+          <Sparkles size={18} />
+          盖签名
+        </button>
+        <button
+          className={buttonClasses.toolbar}
+          type="button"
           onClick={handleSaveDraft}
           disabled={!pdf || Boolean(busyLabel)}
         >
           <Save size={18} />
-          保存草稿
+          保存 PDF 草稿
         </button>
         <button
           className={buttonClasses.toolbarPrimary}
@@ -623,31 +776,23 @@ export function PdfStampTool() {
         </button>
       </SurfacePanel>
 
-      <section className="mt-3.5 grid grid-cols-[320px_minmax(0,1fr)] gap-3.5 max-xl:grid-cols-1">
-        <SurfacePanel className="flex min-h-[760px] flex-col gap-4 p-4 max-xl:min-h-0">
+      <section className="mt-3.5 grid grid-cols-[340px_minmax(0,1fr)] gap-3.5 max-xl:grid-cols-1">
+        <SurfacePanel className="flex min-h-[760px] flex-col gap-4 self-start p-4 xl:sticky xl:top-4 max-xl:min-h-0">
           <section className="grid gap-2.5">
             <h3 className="text-sm font-bold text-slate-800">文件状态</h3>
             <InfoTile
               icon={<FileText size={22} />}
               title={pdf?.name ?? '未选择 PDF'}
-              detail={pdf ? `${pages.length} 页 · ${formatBytes(pdf.size)}` : '拖入或点击上传'}
+              detail={pdf ? `${pages.length} 页 · ${formatBytes(pdf.size)}` : '拖入或点击上传 PDF'}
             />
             <InfoTile
               icon={<ImagePlus size={22} />}
-              title={stamp?.name ?? '未选择印章'}
-              detail={stamp ? formatBytes(stamp.size) : '支持 PNG / JPG / WebP'}
+              title={stamp?.name ?? '未选择印章/签名'}
+              detail={stamp ? formatBytes(stamp.size) : '支持上传印章或直接盖签名'}
             />
             <div className="grid grid-cols-2 gap-2">
-              <InfoTile
-                icon={<Search size={22} />}
-                title={`${pages.length}`}
-                detail="PDF 页数"
-              />
-              <InfoTile
-                icon={<Download size={22} />}
-                title={`${placements.length}`}
-                detail="已盖印章"
-              />
+              <InfoTile icon={<Search size={22} />} title={`${pages.length}`} detail="PDF 页数" />
+              <InfoTile icon={<Download size={22} />} title={`${placements.length}`} detail="已放置印章" />
             </div>
           </section>
 
@@ -661,6 +806,7 @@ export function PdfStampTool() {
                 max="255"
                 value={threshold}
                 onChange={(event) => setThreshold(Number(event.target.value))}
+                disabled={stamp?.kind === 'signature-draft'}
               />
             </RangeField>
             <RangeField label={`默认落章尺寸 ${Math.round(stampScale * 100)}%`}>
@@ -680,8 +826,47 @@ export function PdfStampTool() {
               </SurfacePanel>
             )}
             <p className="text-xs leading-6 text-slate-500">
-              上传印章后会自动去白底。点击页面空白处可直接落章，鼠标滚轮可缩放，拖动可调整位置。
+              上传印章后会自动去白底。使用“盖签名”引用透明签名草稿时，不会再次抠图，能直接保留透明背景。
             </p>
+          </section>
+
+          <section className="grid gap-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-bold text-slate-800">签名草稿库</h3>
+              <button className={buttonClasses.toolbar} type="button" onClick={() => void refreshSignatureDrafts()}>
+                <ArchiveRestore size={16} />
+                刷新
+              </button>
+            </div>
+            {signatureDrafts.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/80 px-3 py-4 text-xs leading-6 text-slate-500">
+                还没有可引用的签名草稿。先去“手写签名”工具保存一张透明签名草稿，再回来这里点击“盖签名”引用。
+              </div>
+            ) : (
+              <div className="grid gap-2">
+                {signatureDrafts.map((draft) => (
+                  <button
+                    key={draft.id}
+                    type="button"
+                    className={cx(buttonClasses.toolbar, 'grid grid-cols-[52px_minmax(0,1fr)] items-center justify-start gap-3 p-2 text-left')}
+                    onClick={() => void handleUseSignatureDraft(draft.id)}
+                  >
+                    <span className="grid h-12 w-13 place-items-center rounded-lg border border-slate-200 bg-checker bg-[length:12px_12px] bg-[position:0_0,0_6px,6px_-6px,-6px_0]">
+                      <img className="max-h-10 max-w-11 object-contain" src={draft.previewUrl} alt="" />
+                    </span>
+                    <span className="min-w-0">
+                      <strong className="block overflow-hidden text-ellipsis whitespace-nowrap text-sm text-slate-800">
+                        {draft.name}
+                      </strong>
+                      <span className="block overflow-hidden text-ellipsis whitespace-nowrap text-xs text-slate-500">
+                        {draft.width} × {draft.height}
+                        {draft.sourceName ? ` · 来源：${draft.sourceName}` : ''}
+                      </span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
           </section>
 
           <section className="grid gap-2.5">
@@ -766,7 +951,7 @@ export function PdfStampTool() {
             </div>
             {selectedPlacement && (
               <div className="rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2 text-xs leading-6 text-slate-600">
-                当前章：第 {selectedPlacement.pageNumber} 页 · {Math.round(selectedPlacement.width)} x{' '}
+                当前印章：第 {selectedPlacement.pageNumber} 页 · {Math.round(selectedPlacement.width)} ×{' '}
                 {Math.round(selectedPlacement.height)} px · 旋转 {Math.round(selectedPlacement.rotation)}°
               </div>
             )}
@@ -778,7 +963,7 @@ export function PdfStampTool() {
                 onClick={deleteSelectedPlacement}
               >
                 <Trash2 size={16} />
-                删除选中章
+                删除选中印章
               </button>
               <button
                 type="button"
@@ -787,15 +972,15 @@ export function PdfStampTool() {
                 onClick={clearPlacements}
               >
                 <Trash2 size={16} />
-                清空全部章
+                清空全部印章
               </button>
             </div>
           </section>
 
           <section className="grid gap-2.5">
-            <h3 className="text-sm font-bold text-slate-800">草稿箱</h3>
+            <h3 className="text-sm font-bold text-slate-800">PDF 草稿</h3>
             <div className="grid gap-2">
-              {drafts.length === 0 && <p className="text-xs text-slate-500">暂无本地草稿</p>}
+              {drafts.length === 0 && <p className="text-xs text-slate-500">暂时没有保存过 PDF 盖章草稿。</p>}
               {drafts.map((draft) => (
                 <article key={draft.id} className="grid grid-cols-[minmax(0,1fr)_38px] gap-2">
                   <button
@@ -809,7 +994,7 @@ export function PdfStampTool() {
                   <button
                     className={buttonClasses.toolbar}
                     type="button"
-                    aria-label="删除草稿"
+                    aria-label="删除 PDF 草稿"
                     onClick={() => void handleDeleteDraft(draft.id)}
                   >
                     <Trash2 size={16} />
@@ -828,7 +1013,9 @@ export function PdfStampTool() {
           <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 max-sm:flex-col max-sm:items-start max-sm:gap-2">
             <div>
               <h3 className="text-base font-bold text-slate-900">PDF 预览区</h3>
-              <p className="text-xs text-slate-500">点击页面空白处落章，支持多页多章、拖动、滚轮缩放和旋转微调。</p>
+              <p className="text-xs text-slate-500">
+                点击页面空白处落章，支持多页多章、拖动、滚轮缩放和旋转微调。
+              </p>
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-500">
               <span className="rounded-full border border-slate-200 bg-white px-3 py-1">共 {pages.length} 页</span>
@@ -837,92 +1024,177 @@ export function PdfStampTool() {
           </div>
 
           {pages.length > 0 ? (
-            <div className="overflow-y-auto bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.08),_transparent_24%),linear-gradient(180deg,#f8fafc_0%,#eef2f7_100%)] p-4">
-              <div className="mx-auto grid max-w-5xl gap-8">
-                {pages.map((page) => {
-                  const pagePlacements = placements.filter((placement) => placement.pageNumber === page.pageNumber)
+            <div className="relative overflow-y-auto bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.08),_transparent_24%),linear-gradient(180deg,#f8fafc_0%,#eef2f7_100%)] p-4">
+              {currentPage && (
+                <div className="mx-auto grid max-w-5xl gap-3">
+                  <div className="flex items-center justify-between gap-3 max-sm:flex-col max-sm:items-start">
+                    <div className="text-sm font-bold text-slate-700">
+                      第 {currentPage.pageNumber} 页
+                      <span className="ml-2 text-xs font-medium text-slate-500">
+                        已放置 {placementCountByPage.get(currentPage.pageNumber) ?? 0} 枚
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className={buttonClasses.toolbar}
+                      disabled={!canPlaceStamp}
+                      onClick={() => addPlacement(currentPage.pageNumber)}
+                    >
+                      <ImagePlus size={16} />
+                      本页居中盖章
+                    </button>
+                  </div>
 
-                  return (
-                    <section key={page.pageNumber} className="grid gap-3">
-                      <div className="flex items-center justify-between gap-3 max-sm:flex-col max-sm:items-start">
-                        <div className="text-sm font-bold text-slate-700">
-                          第 {page.pageNumber} 页
-                          <span className="ml-2 text-xs font-medium text-slate-500">
-                            已放 {placementCountByPage.get(page.pageNumber) ?? 0} 枚
-                          </span>
-                        </div>
+                  <div
+                    ref={(element) => setStageRef(currentPage.pageNumber, element)}
+                    className="relative cursor-crosshair overflow-hidden rounded-[28px] bg-white shadow-[0_20px_50px_rgba(15,23,42,0.12)] ring-1 ring-slate-200"
+                    onClick={(event) => handlePageClick(currentPage.pageNumber, event)}
+                  >
+                    <img className="block h-auto w-full select-none" src={currentPage.dataUrl} alt={`PDF 第 ${currentPage.pageNumber} 页预览`} />
+                    {placements
+                      .filter((placement) => placement.pageNumber === currentPage.pageNumber)
+                      .map((placement) => (
                         <button
+                          key={placement.id}
                           type="button"
-                          className={buttonClasses.toolbar}
-                          disabled={!canPlaceStamp}
-                          onClick={() => addPlacement(page.pageNumber)}
+                          data-placement-id={placement.id}
+                          className={cx(
+                            'absolute cursor-move touch-none select-none transition-[filter,opacity,box-shadow] duration-150',
+                            selectedPlacementId === placement.id
+                              ? 'opacity-100 drop-shadow-[0_0_10px_rgba(225,29,72,0.38)]'
+                              : 'opacity-90',
+                          )}
+                          style={{
+                            left: `${placement.x}px`,
+                            top: `${placement.y}px`,
+                            width: `${placement.width}px`,
+                            height: `${placement.height}px`,
+                            transform: `rotate(${placement.rotation}deg)`,
+                            transformOrigin: 'center center',
+                          }}
+                          onPointerDown={(event) => handlePlacementPointerDown(placement.id, event)}
+                          onPointerMove={(event) => handlePlacementPointerMove(placement.id, event)}
+                          onPointerUp={(event) => endPlacementDrag(placement.id, event)}
+                          onPointerCancel={(event) => endPlacementDrag(placement.id, event)}
+                          onWheel={(event) => handlePlacementWheel(placement.id, event)}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            setSelectedPlacementId(placement.id)
+                          }}
                         >
-                          <ImagePlus size={16} />
-                          本页居中放章
-                        </button>
-                      </div>
-
-                      <div
-                        ref={(element) => setStageRef(page.pageNumber, element)}
-                        className="relative cursor-crosshair overflow-hidden rounded-[28px] bg-white shadow-[0_20px_50px_rgba(15,23,42,0.12)] ring-1 ring-slate-200"
-                        onClick={(event) => handlePageClick(page.pageNumber, event)}
-                      >
-                        <img className="block h-auto w-full select-none" src={page.dataUrl} alt={`PDF 第 ${page.pageNumber} 页预览`} />
-                        {pagePlacements.map((placement) => (
-                          <button
-                            key={placement.id}
-                            type="button"
-                            data-placement-id={placement.id}
-                            className={cx(
-                              'absolute cursor-move touch-none select-none transition-[filter,opacity,box-shadow] duration-150',
-                              selectedPlacementId === placement.id
-                                ? 'opacity-100 drop-shadow-[0_0_10px_rgba(225,29,72,0.38)]'
-                                : 'opacity-90',
-                            )}
-                            style={{
-                              left: `${placement.x}px`,
-                              top: `${placement.y}px`,
-                              width: `${placement.width}px`,
-                              height: `${placement.height}px`,
-                              transform: `rotate(${placement.rotation}deg)`,
-                              transformOrigin: 'center center',
-                            }}
-                            onPointerDown={(event) => handlePlacementPointerDown(placement.id, event)}
-                            onPointerMove={(event) => handlePlacementPointerMove(placement.id, event)}
-                            onPointerUp={(event) => endPlacementDrag(placement.id, event)}
-                            onPointerCancel={(event) => endPlacementDrag(placement.id, event)}
-                            onWheel={(event) => handlePlacementWheel(placement.id, event)}
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              setSelectedPlacementId(placement.id)
-                            }}
-                          >
                             <img
                               className="pointer-events-none h-full w-full object-contain"
-                              src={stampPreviewUrl}
+                              src={placement.imageDataUrl}
                               alt=""
                               style={{ opacity: placement.opacity }}
                             />
-                          </button>
-                        ))}
-                      </div>
-                    </section>
-                  )
-                })}
-              </div>
+                        </button>
+                      ))}
+                  </div>
+                </div>
+              )}
+
+              {pages.length > 1 && (
+                <div className="pointer-events-none sticky bottom-4 z-20 mt-6 flex justify-end">
+                  <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-slate-200 bg-white/94 px-3 py-2 text-sm shadow-[0_16px_40px_rgba(15,23,42,0.12)] backdrop-blur">
+                    <span className="font-semibold text-slate-700">
+                      第 {currentPreviewPage} / {pages.length} 页
+                    </span>
+                    <button
+                      type="button"
+                      className={buttonClasses.toolbar}
+                      disabled={currentPreviewPage <= 1}
+                      onClick={() => jumpToPage(currentPreviewPage - 1)}
+                    >
+                      <ChevronLeft size={16} />
+                      上一页
+                    </button>
+                    <button
+                      type="button"
+                      className={buttonClasses.toolbar}
+                      disabled={currentPreviewPage >= pages.length}
+                      onClick={() => jumpToPage(currentPreviewPage + 1)}
+                    >
+                      下一页
+                      <ChevronRight size={16} />
+                    </button>
+                    <form
+                      className="flex items-center gap-2"
+                      onSubmit={(event) => {
+                        event.preventDefault()
+                        const nextPage = Number(pageJumpValue)
+                        if (!Number.isFinite(nextPage) || nextPage < 1 || nextPage > pages.length) {
+                          setNotice(`请输入 1 到 ${pages.length} 之间的页码。`)
+                          setPageJumpValue(String(currentPreviewPage))
+                          return
+                        }
+                        jumpToPage(nextPage)
+                      }}
+                    >
+                      <input
+                        className="h-9 w-16 rounded-lg border border-slate-200 bg-white px-3 text-center text-sm font-semibold text-slate-700 outline-none transition focus:border-blue-400"
+                        inputMode="numeric"
+                        value={pageJumpValue}
+                        onChange={(event) => setPageJumpValue(event.target.value.replace(/[^\d]/g, ''))}
+                      />
+                      <button type="submit" className={buttonClasses.toolbar}>
+                        跳转
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <EmptyState
               className="min-h-full p-7 text-slate-500"
               icon={<Download size={34} />}
               title="先上传需要盖章的 PDF"
-              description="上传后会自动生成逐页预览。再上传印章图片，就可以直接在页面上点击落章。"
+              description="上传后会自动生成逐页预览。再上传印章图片，或者点击“盖签名”引用已保存的透明签名草稿，就可以在页面上点击落章。"
             />
           )}
         </SurfacePanel>
       </section>
     </section>
   )
+}
+
+async function loadSignatureDraftPreviews() {
+  const summaries = await listSignatureDrafts()
+  const records = await Promise.all(summaries.map((summary) => getSignatureDraft(summary.id)))
+
+  return summaries.flatMap((summary, index) => {
+    const record = records[index]
+    if (!record) {
+      return []
+    }
+
+    return [
+      {
+        ...summary,
+        previewUrl: URL.createObjectURL(new Blob([record.pngBytes], { type: 'image/png' })),
+      },
+    ]
+  })
+}
+
+function normalizePlacements(
+  placements: PlacementSnapshot[],
+  fallbackImageDataUrl: string,
+): StampPlacement[] {
+  return placements
+    .map((placement) => {
+      const imageDataUrl = placement.imageDataUrl ?? fallbackImageDataUrl
+      if (!imageDataUrl) {
+        return null
+      }
+
+      return {
+        ...placement,
+        imageDataUrl,
+      }
+    })
+    .filter((placement): placement is StampPlacement => placement !== null)
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -937,7 +1209,7 @@ function blobToDataUrl(blob: Blob): Promise<string> {
         resolve(reader.result)
       }
     })
-    reader.addEventListener('error', () => reject(reader.error ?? new Error('Blob 读取失败。')))
+    reader.addEventListener('error', () => reject(reader.error ?? new Error('文件读取失败。')))
     reader.readAsDataURL(blob)
   })
 }

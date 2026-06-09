@@ -1,4 +1,14 @@
-export async function removeLightBackground(dataUrl: string, threshold: number) {
+export type BackgroundRemovalOptions = {
+  threshold?: number
+  tolerance?: number
+  yellowThreshold?: number
+  preserveDarkPixels?: boolean
+}
+
+export async function removeBackground(
+  dataUrl: string,
+  options: BackgroundRemovalOptions = {},
+) {
   const image = await loadImage(dataUrl)
   const canvas = document.createElement('canvas')
   const context = canvas.getContext('2d', { willReadFrequently: true })
@@ -11,6 +21,13 @@ export async function removeLightBackground(dataUrl: string, threshold: number) 
   canvas.height = image.naturalHeight
   context.drawImage(image, 0, 0)
 
+  const {
+    threshold = 200,
+    tolerance = 30,
+    yellowThreshold = 160,
+    preserveDarkPixels = false,
+  } = options
+
   const imageData = context.getImageData(0, 0, canvas.width, canvas.height)
   const pixels = imageData.data
 
@@ -19,15 +36,27 @@ export async function removeLightBackground(dataUrl: string, threshold: number) 
     const green = pixels[index + 1]
     const blue = pixels[index + 2]
     const brightness = (red + green + blue) / 3
-    const isLowSaturation = Math.max(red, green, blue) - Math.min(red, green, blue) < 32
-    const strongRed = red > 105 && red > green * 1.05 && red > blue * 1.05
+    const maxChannel = Math.max(red, green, blue)
+    const minChannel = Math.min(red, green, blue)
+    const saturation = maxChannel - minChannel
+    const isLowSaturation = saturation < tolerance
+    const isYellowishPaper =
+      red > 180 &&
+      blue < red - 30 &&
+      green < red &&
+      brightness > yellowThreshold &&
+      saturation < tolerance + 24
 
-    if (brightness >= Math.max(threshold, 242) && isLowSaturation) {
+    if ((brightness > threshold && isLowSaturation) || isYellowishPaper) {
       pixels[index + 3] = 0
-    } else if (strongRed) {
-      pixels[index + 3] = Math.max(140, 255 - Math.max(0, brightness - 150) * 2)
-    } else if (brightness > threshold - 10) {
-      pixels[index + 3] = Math.min(pixels[index + 3], 20)
+      continue
+    }
+
+    if (preserveDarkPixels) {
+      const inkStrength = 255 - brightness
+      if (inkStrength > 40) {
+        pixels[index + 3] = Math.max(pixels[index + 3], Math.min(255, 120 + inkStrength))
+      }
     }
   }
 
@@ -38,6 +67,15 @@ export async function removeLightBackground(dataUrl: string, threshold: number) 
     width: canvas.width,
     height: canvas.height,
   }
+}
+
+export async function removeLightBackground(dataUrl: string, threshold: number) {
+  return removeBackground(dataUrl, {
+    threshold: Math.max(threshold, 242),
+    tolerance: 32,
+    yellowThreshold: Math.max(160, threshold - 28),
+    preserveDarkPixels: true,
+  })
 }
 
 export function loadImage(src: string): Promise<HTMLImageElement> {

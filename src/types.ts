@@ -8,6 +8,7 @@ export type PdfPagePreview = {
 export type StampPlacement = {
   id: string
   pageNumber: number
+  imageDataUrl: string
   x: number
   y: number
   width: number
@@ -16,15 +17,28 @@ export type StampPlacement = {
   opacity: number
 }
 
+export type StampSourceKind = 'upload' | 'signature-draft'
+
 export type DraftRecord = {
   id: string
   name: string
   updatedAt: number
   pdfName: string
   pdfBytes: ArrayBuffer
+  stampKind?: StampSourceKind
   stampName?: string
   stampBytes?: ArrayBuffer
   threshold: number
   stampScale: number
   placements: StampPlacement[]
+}
+
+export type SignatureDraftRecord = {
+  id: string
+  name: string
+  updatedAt: number
+  sourceName?: string
+  pngBytes: ArrayBuffer
+  width: number
+  height: number
 }
